@@ -32,14 +32,5 @@ echo "Starting UI Automation..."
 NODE_PATH=$(npm root -g) node ./automation.js > /tmp/automation.log 2>&1 &
 
 echo "Starting FFmpeg stream to SRS gateway..."
-ffmpeg -f x11grab \
-  -video_size 1920x1080 \
-  -framerate 25 \
-  -i :99.0 \
-  -c:v libx264 \
-  -preset ultrafast \
-  -tune zerolatency \
-  -vf "drawtext=x=30:y=30:fontsize=20:fontcolor=white:reload=25:fontfile=/usr/share/fonts/noto/NotoSansMono-Bold.ttf:textfile=devstate" \
-  -pix_fmt yuv420p \
-  -f flv \
-  rtmp://10.10.10.10/live/livestream > /tmp/ffmpeg.log 2>&1 &
+
+systemctl --user start livestream.service

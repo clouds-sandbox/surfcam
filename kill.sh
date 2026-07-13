@@ -1,4 +1,4 @@
-pkill -9 -f "ffmpeg"
+systemctl --user stop livestream
 pkill -9 -f "node"
 pkill -9 -f "Reolink.exe"
 pkill -9 -f "wine"
