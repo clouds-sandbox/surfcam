@@ -3,6 +3,8 @@
 ./kill.sh
 # Define the target display context
 export DISPLAY=:99
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
 
 echo "Starting Xvfb on display ${DISPLAY}..."
 Xvfb :99 -screen 0 1920x1080x24 &
