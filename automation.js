@@ -2,6 +2,9 @@ const puppeteer = require('puppeteer-core');
 const { exec } = require('child_process');
 const util = require('util')
 
+const CYCLE_INTERVAL = 3000;
+const TIMEOUT_FOR_IDLE = 15000;
+
 async function getStreamClients() {
     try {
         const response = await fetch('http://10.10.10.10:1985/api/v1/streams/');
@@ -18,8 +21,8 @@ async function getStreamClients() {
     }
 }
 
-async function writeCameraStatus(status) {
-    const e = execAsync(`echo "Camera status: ${status}" > devstate.tmp && mv devstate.tmp devstate`)
+async function writeCameraStatus(status, noDemand = false) {
+    const e = execAsync(`echo "Състояние на камерата: ${status}${noDemand ? '\nБез зрители в последните 15 секунди, изчакайте за свързване...' : ''}" > devstate.tmp && mv devstate.tmp devstate`)
     const se = (await e.catch(e => e)).stderr
     if (!!se) console.error("Error when writing camera status: " + se)
 }
@@ -39,13 +42,13 @@ class ReolinkMonitor {
             },
             isInFullScreen: false,
             streamClients: 0,
-            noDemandCycles: 0,
+            noDemandCycles: Math.ceil(TIMEOUT_FOR_IDLE / CYCLE_INTERVAL),
             isPlaying: false,
         }
     }
 
     #hasDemand() {
-        return this.state.noDemandCycles < 3;
+        return this.state.noDemandCycles * CYCLE_INTERVAL < TIMEOUT_FOR_IDLE;
     }
 
     async init() {
@@ -77,30 +80,30 @@ class ReolinkMonitor {
         while (true) {
             try {
                 await this.updateState()
-                await writeCameraStatus(this.state.camera.status);
+                const hasDemand = this.#hasDemand()
+                await writeCameraStatus(this.state.camera.status, !hasDemand);
                 if(this.state.camera.status === 'Connected') {
-                    if (!this.#hasDemand() && this.state.isPlaying) {
+                    if (!hasDemand && this.state.isPlaying) {
                         await this.disconnectDevice();
                     }
                     if (!this.state.isInFullScreen && this.state.isPlaying) await this.enterFullscreen()
-                    continue;
                 }
-                else if(this.state.camera.canRetry && this.#hasDemand()) {
+                else if(this.state.camera.canRetry && hasDemand) {
                     if(!this.state.isPlaying) {
                         console.log('Retry allowed. Trying to connect...')
                         if(this.state.isInFullScreen) await this.exitFullscreen()
                         await this.clickDevice()
                     }
                 }
-                else if(!this.#hasDemand()) {}
-                else{
+                else if(!hasDemand) {}
+                else {
                     console.log('Unrecoverable camera state:', this.state.camera.status)
                 }
             }
             catch (e) {
                 console.error(`Monitor loop step failed: ${e.message}\n${e.stack}`);
             }
-            await sleep(5000)
+            await sleep(CYCLE_INTERVAL)
         }
     }
 
