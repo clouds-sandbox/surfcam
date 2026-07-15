@@ -1,5 +1,5 @@
 const puppeteer = require('puppeteer-core');
-const { exec } = require('child_process');
+const {exec} = require('child_process');
 const util = require('util')
 
 const CYCLE_INTERVAL = 3000;
@@ -21,8 +21,14 @@ async function getStreamClients() {
     }
 }
 
-async function writeCameraStatus(status, noDemand = false) {
-    const e = execAsync(`echo "Състояние на камерата: ${status}${noDemand ? '\nБез зрители в последните 15 секунди, изчакайте за свързване...' : ''}" > devstate.tmp && mv devstate.tmp devstate`)
+async function writeCameraStatus(status, batteryPercent, isCharging, audienceCount, noDemand = false) {
+    const e = execAsync(
+        `echo "Състояние на камерата: ${status}` +
+        `\nБатерия: ${batteryPercent.replace(/%/, '\\%')}${isCharging ? ' (зарежда се)':''}` +
+        `\nЗрители: ${audienceCount}` +
+        `${noDemand ? '\nБез зрители в последните 15 секунди, изчакайте за свързване...' : ''}"` +
+        `> devstate.tmp && mv devstate.tmp devstate`
+    )
     const se = (await e.catch(e => e)).stderr
     if (!!se) console.error("Error when writing camera status: " + se)
 }
@@ -39,6 +45,8 @@ class ReolinkMonitor {
             camera: {
                 status: 'Unknown',
                 canRetry: true,
+                batteryPercent: 'N/A',
+                isCharging: false,
             },
             isInFullScreen: false,
             streamClients: 0,
@@ -68,8 +76,7 @@ class ReolinkMonitor {
                     const btn = await el.$('button')
                     await btn.click();
                     console.log('Clicked "Cancel".')
-                }
-                catch (e) {
+                } catch (e) {
                     console.log('Failed to deal with dialog.')
                 }
             }
@@ -81,26 +88,27 @@ class ReolinkMonitor {
             try {
                 await this.updateState()
                 const hasDemand = this.#hasDemand()
-                await writeCameraStatus(this.state.camera.status, !hasDemand);
-                if(this.state.camera.status === 'Connected') {
+                await writeCameraStatus(this.state.camera.status, this.state.camera.batteryPercent, this.state.camera.isCharging, this.state.streamClients - 1, !hasDemand);
+                if (this.state.camera.status === 'Connected') {
                     if (!hasDemand && this.state.isPlaying) {
-                        await this.disconnectDevice();
-                    }
-                    if (!this.state.isInFullScreen && this.state.isPlaying) await this.enterFullscreen()
-                }
-                else if(this.state.camera.canRetry && hasDemand) {
-                    if(!this.state.isPlaying) {
+                        await this.stopStream();
+                    } else if (hasDemand && !this.state.isPlaying) {
+                        await this.startStream();
+                        if (!this.state.isInFullScreen) {
+                            await this.enterFullscreen()
+                        }
+                    } else if (!this.state.isInFullScreen && this.state.isPlaying) await this.enterFullscreen()
+                } else if (this.state.camera.canRetry && hasDemand) {
+                    if (!this.state.isPlaying) {
                         console.log('Retry allowed. Trying to connect...')
-                        if(this.state.isInFullScreen) await this.exitFullscreen()
+                        if (this.state.isInFullScreen) await this.exitFullscreen()
                         await this.clickDevice()
                     }
-                }
-                else if(!hasDemand) {}
-                else {
+                } else if (!hasDemand) {
+                } else {
                     console.log('Unrecoverable camera state:', this.state.camera.status)
                 }
-            }
-            catch (e) {
+            } catch (e) {
                 console.error(`Monitor loop step failed: ${e.message}\n${e.stack}`);
             }
             await sleep(CYCLE_INTERVAL)
@@ -115,7 +123,13 @@ class ReolinkMonitor {
             const settimgs = el.querySelector('.device-settings')
             const canRetry = settimgs.querySelector('div[title="Retry"]').parentElement.style.display !== 'none';
             const text = el.querySelector('.state-text').textContent
-            return { status: text, canRetry }
+            const batteryNum = el.querySelector('.battery-num')
+            return {
+                status: text,
+                canRetry,
+                batteryPercent: batteryNum.style.width,
+                isCharging: batteryNum.classList.contains('reo-xcharging-animation')
+            }
         })
         this.state.isPlaying = await liveToolBar.evaluate(el => {
             return el.style.display !== 'none' && !!el.querySelector('.video-stop-btn')
@@ -126,15 +140,14 @@ class ReolinkMonitor {
         console.log(this.state);
     }
 
-    async enterFullscreen(){
+    async enterFullscreen() {
         const fscr = await this.mainPage.evaluate(() => {
             const items = document.querySelectorAll('#live_tab li.btn-cell div');
             for (const div of items) {
                 if (div.getAttribute('title') === 'Full Screen') {
                     try {
                         div.click();
-                    }
-                    catch (e) {
+                    } catch (e) {
                         return false;
                     }
                     return true;
@@ -143,7 +156,7 @@ class ReolinkMonitor {
             return false;
         });
 
-        if(!fscr) {
+        if (!fscr) {
             console.warn('Failed to enter fullscreen.');
             return false;
         }
@@ -153,13 +166,13 @@ class ReolinkMonitor {
         return true;
     }
 
-    async exitFullscreen(){
+    async exitFullscreen() {
         console.log('Exiting fullscreen with ESCAPE...');
         await this.mainPage.focus('body');
         const sp = execAsync('DISPLAY=:99 xdotool key Escape')
-        const { stdout, stderr } = await sp.catch(e => e)
-        if(stdout) console.log('xdotool stdout:', stdout)
-        if(stderr) console.error('xdotool stderr:', stderr)
+        const {stdout, stderr} = await sp.catch(e => e)
+        if (stdout) console.log('xdotool stdout:', stdout)
+        if (stderr) console.error('xdotool stderr:', stderr)
         this.state.isInFullScreen = false;
     }
 
@@ -175,10 +188,16 @@ class ReolinkMonitor {
             this.#browser.disconnect();
     }
 
-    async disconnectDevice() {
+    async stopStream() {
         const el = await this.mainPage.waitForSelector('.video-stop-btn')
         await el.click();
         console.log('Clicked stop video.')
+    }
+
+    async startStream() {
+        const el = await this.mainPage.waitForSelector('.video-start-btn')
+        await el.click();
+        console.log('Clicked start video.')
     }
 }
 
@@ -189,7 +208,7 @@ function sleep(ms) {
 }
 
 (async () => {
-    await using monitor = new ReolinkMonitor(9223);
+        await using monitor = new ReolinkMonitor(9223);
     await monitor.init();
     await monitor.monitorLoop();
 })();
