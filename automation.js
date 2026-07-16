@@ -1,6 +1,8 @@
 const puppeteer = require('puppeteer-core');
 const {exec} = require('child_process');
 const util = require('util')
+const prom = require('prom-client')
+const http = require('http')
 
 const CYCLE_INTERVAL = 3000;
 const TIMEOUT_FOR_IDLE = 15000;
@@ -52,6 +54,39 @@ class ReolinkMonitor {
             streamClients: 0,
             noDemandCycles: Math.ceil(TIMEOUT_FOR_IDLE / CYCLE_INTERVAL),
             isPlaying: false,
+        }
+        this.prom = {
+            registry: new prom.Registry(),
+            metrics: {
+                cameraBatteryPercent: new prom.Gauge({
+                    name: 'camera_battery_percent',
+                    help: 'Camera Battry in %'
+                }),
+                cameraConnected: new prom.Gauge({
+                    name: 'camera_connected',
+                    help: '1 if status is Connected, else 0'
+                }),
+                viewersCount: new prom.Gauge({
+                    name: 'viewers_count',
+                    help: 'How many people currently streaming'
+                })
+            }
+        }
+        this.prom.registry.registerMetric(this.prom.metrics.cameraBatteryPercent)
+        this.prom.registry.registerMetric(this.prom.metrics.cameraConnected)
+        this.prom.registry.registerMetric(this.prom.metrics.viewersCount)
+
+        // Prom metric server
+        http.createServer(this.#promResponder).listen(9100, '10.10.10.11');
+    }
+
+    #promResponder = async (req, res) => {
+        if (req.url === '/metrics') {
+            res.setHeader('Content-Type', this.prom.registry.contentType);
+            res.end(await this.prom.registry.metrics());
+        } else {
+            res.writeHead(404);
+            res.end();
         }
     }
 
@@ -138,6 +173,15 @@ class ReolinkMonitor {
         if (this.state.streamClients < 2) this.state.noDemandCycles++
         else this.state.noDemandCycles = 0
         console.log(this.state);
+
+        this.prom.metrics.cameraConnected.set(this.state.camera.status === 'Connected' ? 1 : 0);
+        try {
+            this.prom.metrics.cameraBatteryPercent.set(parseInt(this.state.camera.batteryPercent.replace(/%/, '')))
+        }
+        catch (e) {
+            console.warn('Failed to set cameraBattery metric!\n'+e.message+'\n'+e.stack);
+        }
+        this.prom.metrics.viewersCount.set(this.state.streamClients - 1);
     }
 
     async enterFullscreen() {
