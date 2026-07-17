@@ -133,7 +133,13 @@ class ReolinkMonitor {
                             await this.enterFullscreen()
                         }
                     } else if (!this.state.isInFullScreen && this.state.isPlaying) await this.enterFullscreen()
-                } else if (this.state.camera.canRetry && hasDemand) {
+                }
+                else if (this.state.camera.status === 'Timeout') {
+                    await execAsync('./start.sh').catch(e => {
+                        console.error('Failed to restart script:', e.message, e.stack)
+                    })
+                }
+                else if (this.state.camera.canRetry && hasDemand) {
                     if (!this.state.isPlaying) {
                         console.log('Retry allowed. Trying to connect...')
                         if (this.state.isInFullScreen) await this.exitFullscreen()
