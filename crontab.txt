@@ -1,0 +1,4 @@
+0 8 * * * ~/start.sh
+30 18 * * * ~/kill.sh
+* 8-17 * * * ~/restartIf.sh
+#2-58/2 7-17 * * * DISPLAY=:99 xdotool click 1
